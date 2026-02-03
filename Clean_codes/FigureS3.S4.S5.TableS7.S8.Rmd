@@ -1,0 +1,564 @@
+---
+title: "SupplementaryFigureS3_s4_s5_and_stats"
+author: "Laura Scagnellato"
+date: "2025-10-21"
+output: html_document
+---
+
+```{r setup}
+#load packages 
+require(haven)
+require(ggplot2)
+require(dplyr)
+require(tidyr)
+require(patchwork)
+require(tibble)
+library(readxl)
+
+#new trajectory assignment by me 
+setwd("C:\\Users\\sejjl81\\OneDrive - University College London\\Documents\\MTXtrajectory\\Trajectories_07.2025")
+
+file_path <- "C:\\Users\\sejjl81\\OneDrive - University College London\\Documents\\MTXtrajectory\\Trajectories_07.2025\\traj_works_results.xlsx"
+
+#load relevant data
+group3 <- read_excel(file_path, sheet = "ls_run3") %>% 
+  rename(study_id = "patientid")
+
+names(group3)[names(group3) != "study_id"] <- paste0("3", names(group3)[names(group3) != "study_id"])
+
+group4 <- read_excel(file_path, sheet = "ls_run4")%>% 
+  rename(study_id = "patientid")
+names(group4)[names(group4) != "study_id"] <- paste0("4", names(group4)[names(group4) != "study_id"])
+
+group5 <- read_excel(file_path, sheet = "ls_run5")%>% 
+  rename(study_id = "patientid")
+names(group5)[names(group5) != "study_id"] <- paste0("5", names(group5)[names(group5) != "study_id"])
+
+raw_covs <- read_excel("C:\\Users\\sejjl81\\OneDrive - University College London\\Documents\\MTXtrajectory\\Trajectories_07.2025\\fullcharmscluster.xlsx")
+
+#modify patientid to study_id as per the other datasets 
+raw_covs <- raw_covs %>% 
+  rename(study_id = patientid) %>% 
+  mutate(across(
+    c(activejoints_t2, activejoints_t1, esr_t1, esr_t2, 
+      patientparentglobal_t1, patientparentglobal_t2, timepointdate_diff),
+    as.numeric
+  ))
+
+all_traj <- read_excel("C:\\Users\\sejjl81\\OneDrive - University College London\\Documents\\MTXtrajectory\\Trajectories_07.2025\\all_traj.xlsx")
+
+
+
+#################################################################################
+#attach group information to all patients 
+all_1199 <- left_join(raw_covs, group3, by = "study_id")
+all_1199 <- left_join(all_1199, group4, by = "study_id")
+all_1199 <- left_join(all_1199, group5, by = "study_id")
+all_1199 <- janitor::clean_names(all_1199)
+
+##################################################################################
+#attach group information to patients with IFN score  
+with_groups <- left_join(all_traj, group3, by = "study_id")
+with_groups <- left_join(with_groups, group4, by = "study_id")
+with_groups <- left_join(with_groups, group5, by = "study_id")
+with_groups <- janitor::clean_names(with_groups)
+
+sum(is.na(with_groups[, "x3_traj_group"]))
+#6 patients were not assigned!
+
+only_withtraj <- all_1199 %>% 
+  filter(!is.na(x3_traj_group))
+with_groups <- with_groups %>% 
+mutate(sex = case_when(
+    sex == "2" ~ "1", 
+    sex == "1" ~ "0", 
+    sex == "F" ~ "1", 
+    sex == "M" ~ "0", 
+    TRUE ~ sex
+  )) 
+
+#write.csv(only_withtraj, "withtraj.csv")
+```
+
+## adapt for plotting (only_withtraj in long format)
+
+```{r}
+#create a long dataframe 
+#pivot longer for each point has its identity 
+data_long <- only_withtraj %>%
+  pivot_longer(
+    cols = c(activejoints_t1, activejoints_t2, physicianglobal_t1, 
+             physicianglobal_t2, patientparentglobal_t1, patientparentglobal_t2, 
+             esr_t1, esr_t2),
+    names_to = c(".value", "fup"),
+    names_pattern = "^(.*)_(t[0-9]+)$"
+  )
+#create a new follow up variable 
+data_long <- data_long %>%
+  mutate(
+    time_months = ifelse(fup == "t1", 0, floor(timepointdate_diff / 30.24))
+  )
+
+data_long$physicianglobal <- as.numeric(data_long$physicianglobal)
+
+# multiply VAS variables by 10 and log transform all variables 
+data_long <- data_long %>%
+  mutate(
+    log_physicianglobal = log1p(physicianglobal * 10), 
+    log_patientparentglobal = log1p(patientparentglobal * 10), 
+    log_activejoints = log1p(activejoints), 
+    log_esr = log1p(esr)
+  )
+```
+
+#study trajectory of single variables in 3 groups 
+#supplementary figure 3
+
+```{r}
+
+# Define variables and labels
+variables <- list(
+  AJC = "log_activejoints",
+  PhyVAS = "log_physicianglobal",
+  PGE = "log_patientparentglobal",
+  ESR = "log_esr"
+)
+
+class_colors <- c(
+  "1" = "#E41A1C",  # red
+  "2" = "#377EB8",  # blue
+  "3" = "#FF7F00"   # orange
+)
+
+
+# Create an empty list to store plots
+plot_list <- list()
+
+# Loop through each variable and class
+for (var_name in names(variables)) {
+  var_col <- variables[[var_name]]
+  
+  for (class_id in 1:3) {
+    plot_data <- data_long %>% filter(x3_traj_group == class_id)
+    
+    p <- ggplot(plot_data, aes(x = time_months, y = .data[[var_col]], color = as.factor(x3_traj_group))) +
+      geom_smooth(method = "loess", se = TRUE, span = 1.5) +
+      scale_color_manual(values = class_colors) +
+      labs(
+        title = paste(var_name, "- Group", class_id),
+        x = "Time (months)",
+        y = paste(var_name, "(log)"),
+        color = "Class"
+      ) +
+      theme_classic(base_size = 20, base_family = "Arial") +
+      theme(legend.position = "none", 
+            text = element_text(family = "Arial"),
+    axis.text.x = element_text(size = 17, family = "Arial"),
+    axis.text.y = element_text(size = 17, family = "Arial"),
+    plot.title = element_text(family = "Arial")) +
+      ylim(-0.5, 5) +
+      xlim(0, 9)
+    
+    
+    # Add plot to list
+    plot_list[[paste0(var_name, "_", class_id)]] <- p
+  }
+}
+
+# Combine all plots into a grid (4 rows × 5 columns)
+combined_plot <- wrap_plots(plot_list, nrow = 4)
+
+# Save the combined plot
+ggsave("combined_trajectories_by_3groups.png", combined_plot, width = 12, height = 12, dpi = 600)
+```
+
+
+#####################################################################################
+#stats on 3 groups 
+######################################################################################
+
+```{r }
+
+
+#COMPARE CLASSES WITH KRUSKAL WALLIS TEST (OUTLIERS + NON NORMAL DISTRIBUTION)
+kruskal.test(pbmc51ifnscores ~ x3_traj_group, data = tis)
+kruskal.test(ra5scores ~ x3_traj_group, data = tis)
+#both non significant 
+
+#################################################################################
+# logistic regression 
+#################################################################################
+# "1" = "slow improver",
+#"2" = "fast improver",
+#"3" = "persistent"
+
+tis <- tis %>% 
+  mutate(resistant = case_when(x3_traj_group == "Persistent" ~ 1, 
+                               .default = 0))
+#resistant and 51IFN 
+model_1 <- glm(resistant ~ pbmc51ifnscores, data = tis, family = binomial)
+summary(model_1) #
+#resistant and 5IFN 
+model_2 <- glm(resistant ~ ra5scores, data = tis, family = binomial)
+summary(model_2) #
+
+#fast_improver & genes 
+tis <- tis %>% 
+  mutate(fast_improver = case_when(x3_traj_group == "Fast improver" ~ 1, 
+                               .default = 0))
+
+#responder and 51gs 
+model_3 <- glm(fast_improver ~ pbmc51ifnscores, data = tis, family = binomial)
+summary(model_3) 
+#responder and 5gs 
+model_4 <- glm(fast_improver ~ ra5scores, data = tis, family = binomial)
+summary(model_4) 
+#low_responder 
+tis <- tis %>% 
+  mutate(low_responder = case_when(x3_traj_group == "Slow improver" ~ 1, 
+                              .default = 0))
+model_5 <- glm(low_responder ~ pbmc51ifnscores, data = tis, family = binomial)
+summary(model_5) #
+model_6 <- glm(low_responder ~ ra5scores, data = tis, family = binomial)
+summary(model_6) #
+
+
+##################################################################################
+##linear models for 3 groups
+#################################################################################
+tis_plus <- with_groups %>% 
+  select(study_id, pbmc51ifnscores, ra5scores, age, sex, x3_traj_group) %>% 
+  filter(!is.na(x3_traj_group))
+
+#51gs 
+m0 <- lm(pbmc51ifnscores ~ age + factor(sex), tis_plus)
+m1 <- lm(pbmc51ifnscores ~ age + factor(sex) + as.factor(x3_traj_group), tis_plus)
+anova(m0, m1)
+
+#5gs 
+m00 <- lm(ra5scores ~ age, tis_plus)
+m10 <- lm(ra5scores ~ age + as.factor(x3_traj_group), tis_plus)
+anova(m00, m10)
+
+
+
+```
+
+#################################################################################
+#4 groups trajectories 
+####################################################################################
+Supplementary Figure 4 
+```{r}
+#Proposed interpretation 
+# 1. Feels well, looks bad 
+# 2. Fast responder 
+# 3. Slow responder 
+# 4. Non responder 
+
+# Define variables and labels
+variables <- list(
+  AJC = "log_activejoints",
+  PhyVAS = "log_physicianglobal",
+  PGE = "log_patientparentglobal",
+  ESR = "log_esr"
+)
+
+class_colors <- c(
+  "1" = "#E41A1C",  
+  "2" = "#377EB8",
+  "3" = "#4DAF4A", 
+  "4" = "#FF7F00"   
+)
+
+
+# Create an empty list to store plots
+plot_list <- list()
+
+# Loop through each variable and class
+for (var_name in names(variables)) {
+  var_col <- variables[[var_name]]
+  
+  for (class_id in 1:4) {
+    plot_data <- data_long %>% filter(x4_traj_group == class_id)
+    
+    p <- ggplot(plot_data, aes(x = time_months, y = .data[[var_col]], color = as.factor(x4_traj_group))) +
+      geom_smooth(method = "loess", se = TRUE, span = 1.5) +
+      scale_color_manual(values = class_colors) +
+      labs(
+        title = paste(var_name, "- Group", class_id),
+        x = "Time (months)",
+        y = paste(var_name, "(log)"),
+        color = "Class"
+      ) +
+      theme_classic(base_size = 20, base_family = "Arial") +
+      theme(legend.position = "none", 
+            text = element_text(family = "Arial"),
+    axis.text.x = element_text(size = 17, family = "Arial"),
+    axis.text.y = element_text(size = 17, family = "Arial"),
+    plot.title = element_text(family = "Arial")) +
+      ylim(-0.5, 5) +
+      xlim(0, 9)
+    
+    
+    # Add plot to list
+    plot_list[[paste0(var_name, "_", class_id)]] <- p
+  }
+}
+
+# Combine all plots into a grid (4 rows × 5 columns)
+combined_plot <- wrap_plots(plot_list, nrow = 4)
+
+# Save the combined plot
+ggsave("combined_trajectories_by_4groups.png", combined_plot, width = 12, height = 12, dpi = 600)
+```
+
+Supplementary Figure 4 (B)
+```{r}
+
+#################################################################################
+#STATS on 4 groups 
+#################################################################################
+
+```{r}
+
+#COMPARE CLASSES WITH KRUSKAL WALLIS TEST (OUTLIERS + NON NORMAL DISTRIBUTION)
+kruskal.test(pbmc51ifnscores ~ x4_traj_group, data = tis)
+kruskal.test(ra5scores ~ x4_traj_group, data = tis)
+#both non significant 
+
+##################################################################################
+##linear models for 3 groups
+#################################################################################
+tis_plus <- with_groups %>% 
+  select(study_id, pbmc51ifnscores, ra5scores, age, sex, x4_traj_group) %>% 
+  filter(!is.na(x4_traj_group))
+
+#51gs 
+m0 <- lm(pbmc51ifnscores ~ age + sex, tis_plus)
+m1 <- lm(pbmc51ifnscores ~ age + sex + as.factor(x4_traj_group), tis_plus)
+anova(m0, m1)
+
+#5gs 
+m00 <- lm(ra5scores ~ age, tis_plus)
+m10 <- lm(ra5scores ~ age + as.factor(x4_traj_group), tis_plus)
+anova(m00, m10)
+
+#################################################################################
+#logistic regression 
+# "1" = "Feels well, looks bad",
+# "2" = "Fast responder",
+# "3" = "Slow responder", 
+# "4" = "Non responder
+
+tis <- tis %>% 
+  mutate(resistant = case_when(x4_traj_group == "Non responder" ~ 1, 
+                               .default = 0))
+#resistant and 51IFN 
+model_1 <- glm(resistant ~ pbmc51ifnscores, data = tis, family = binomial)
+summary(model_1) #ns 
+#resistant and 5IFN 
+model_2 <- glm(resistant ~ ra5scores, data = tis, family = binomial)
+summary(model_2) #ns 
+
+#fast_improver & genes 
+tis <- tis %>% 
+  mutate(fast_improver = case_when(x4_traj_group == "Fast responder" ~ 1, 
+                                   .default = 0))
+
+#responder and 51gs 
+model_3 <- glm(fast_improver ~ pbmc51ifnscores, data = tis, family = binomial)
+summary(model_3) #0.0635 
+#responder and 5gs 
+model_4 <- glm(fast_improver ~ ra5scores, data = tis, family = binomial)
+summary(model_4) #0.0568
+
+#low_responder 
+tis <- tis %>% 
+  mutate(low_responder = case_when(x4_traj_group == "Slow responder" ~ 1, 
+                                   .default = 0))
+model_5 <- glm(low_responder ~ pbmc51ifnscores, data = tis, family = binomial)
+summary(model_5) #ns
+model_6 <- glm(low_responder ~ ra5scores, data = tis, family = binomial)
+summary(model_6) #ns
+
+#highphyVAS 
+tis <- tis %>% 
+  mutate(high_phyvas = case_when(x4_traj_group == "High phyVAS" ~ 1, 
+                                   .default = 0))
+model_5 <- glm(high_phyvas ~ pbmc51ifnscores, data = tis, family = binomial)
+summary(model_5) #ns
+model_6 <- glm(high_phyvas ~ ra5scores, data = tis, family = binomial)
+summary(model_6) #ns 
+
+```
+####################################################################################
+#5 groups and IFN 
+##################################################################################
+```{r}
+# Define variables and labels
+variables <- list(
+  AJC = "log_activejoints",
+  PhyVAS = "log_physicianglobal",
+  PGE = "log_patientparentglobal",
+  ESR = "log_esr"
+)
+
+class_colors <- c(
+  "1" = "#E41A1C",  
+  "2" = "#377EB8",
+  "3" = "#4DAF4A", 
+  "4" = "#FF7F00", 
+  "5" = "#6A3D9A"
+)
+
+
+# Create an empty list to store plots
+plot_list <- list()
+
+# Loop through each variable and class
+for (var_name in names(variables)) {
+  var_col <- variables[[var_name]]
+  
+  for (class_id in 1:5) {
+    plot_data <- data_long %>% filter(x5_traj_group == class_id)
+    
+    p <- ggplot(plot_data, aes(x = time_months, y = .data[[var_col]], color = as.factor(x5_traj_group))) +
+      geom_smooth(method = "loess", se = TRUE, span = 1, linewidth = 1.5) +
+      scale_color_manual(values = class_colors) +
+      labs(
+        title = paste(var_name, "- Group", class_id),
+        x = "Time (months)",
+        y = paste(var_name, "(log)"),
+        color = "Class"
+      ) +
+      theme_classic(base_size = 14, base_family = "Arial") +
+      theme(legend.position = "none", 
+            text = element_text(family = "Arial"),
+    axis.text.x = element_text(size = 12, family = "Arial"),
+    axis.text.y = element_text(size = 12, family = "Arial"),
+    plot.title = element_text(family = "Arial")) +
+      ylim(-0.5, 5) +
+      xlim(0, 9)
+    
+    
+    # Add plot to list
+    plot_list[[paste0(var_name, "_", class_id)]] <- p
+  }
+}
+
+# Combine all plots into a grid (4 rows × 5 columns)
+combined_plot <- wrap_plots(plot_list, nrow = 4)
+
+# Save the combined plot
+ggsave("combined_trajectories_by_5groups_confidenceintervals.png", combined_plot, width = 12, height = 8, dpi = 600)
+
+```
+
+#stastistical tests for 5 groups
+```{r}
+tis <- with_groups %>% 
+  select(study_id, pbmc51ifnscores, ra5scores, x5_traj_group, age, sex)
+
+kruskal.test(pbmc51ifnscores ~ x5_traj_group, data = tis)
+kruskal.test(ra5scores ~ x5_traj_group, data = tis)
+#both non significant.... 
+
+#################################################################################
+# logistic regression 
+#################################################################################
+#create binary variable: resistant disease 
+# class definition: 
+## 1 = high phyVAS
+## 2 = fast improver 
+## 3 = high PGE
+## 4 = slow improver
+## 5 = persistent 
+
+tis <- tis %>% 
+  mutate(resistant = case_when(x5_traj_group == 5 ~ 1, 
+                               .default = 0))
+#resistant and 51IFN 
+model_1 <- glm(resistant ~ pbmc51ifnscores, data = tis, family = binomial)
+summary(model_1)
+#resistant and 5IFN 
+model_2 <- glm(resistant ~ ra5scores, data = tis, family = binomial)
+summary(model_2)
+
+#responder & genes 
+tis <- tis %>% 
+  mutate(responder = case_when(x5_traj_group == 2 ~ 1, 
+                               .default = 0))
+
+#responder and 51gs 
+model_3 <- glm(responder ~ pbmc51ifnscores, data = tis, family = binomial)
+summary(model_3)
+#responder and 5gs 
+model_4 <- glm(responder ~ ra5scores, data = tis, family = binomial)
+summary(model_4)
+
+
+#slow responder 
+tis <- tis %>% 
+  mutate(slowresp = case_when(x5_traj_group == 4 ~ 1, 
+                               .default = 0))
+
+model_5 <- glm(slowresp ~ pbmc51ifnscores, data = tis, family = binomial)
+summary(model_5)
+#slowresp and 5gs 
+model_6 <- glm(slowresp ~ ra5scores, data = tis, family = binomial)
+summary(model_6)
+
+#hiphyVAS 
+tis <- tis %>% 
+  mutate(highphyvas = case_when(x5_traj_group == 1 ~ 1, 
+                               .default = 0))
+
+model_7 <- glm(highphyvas ~ pbmc51ifnscores, data = tis, family = binomial)
+summary(model_7)
+#slowresp and 5gs 
+model_8 <- glm(highphyvas ~ ra5scores, data = tis, family = binomial)
+summary(model_8)
+
+#highpge 
+tis <- tis %>% 
+  mutate(highpge = case_when(x5_traj_group == 3 ~ 1, 
+                               .default = 0))
+
+model_9 <- glm(highpge ~ pbmc51ifnscores, data = tis, family = binomial)
+summary(model_9)
+#slowresp and 5gs 
+model_10 <- glm(highpge ~ ra5scores, data = tis, family = binomial)
+summary(model_10)
+
+
+```
+
+##################################################################################
+##linear models 
+################################################################################# 5 groups #
+```{r}
+
+tis <- with_groups %>% 
+  select(study_id, pbmc51ifnscores, ra5scores, x5_traj_group, age, sex)
+tis <- tis %>% 
+  filter(!is.na(x5_traj_group))
+
+#51gs 
+m0 <- lm(pbmc51ifnscores ~ age + factor(sex), tis)
+m1 <- lm(pbmc51ifnscores ~ age + factor(sex) + as.factor(x5_traj_group), tis)
+anova(m0, m1)
+
+#5gs 
+m00 <- lm(ra5scores ~ age, tis_plus)
+m10 <- lm(ra5scores ~ age + as.factor(class), tis_plus)
+anova(m00, m10)
+
+```
+
+#p values correction 
+```{r}
+pvals <- c(0.0663, 0.13, 0.130, 0.249,	0.114, 0.231, 0.956, 0.671,	0.813, 0.749,	0.953, 0.842,
+0.0635, 0.0568,	0.0635, 0.0568,	0.709, 0.603, 0.813, 0.509,	0.653, 0.353, 0.0341, 0.014945)
+p.adjust(pvals, method = "BH")
+
+```

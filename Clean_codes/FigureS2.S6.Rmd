@@ -1,0 +1,277 @@
+---
+title: "TRajectories_summary_file"
+author: "Laura Scagnellato"
+date: "2025-10-21"
+output: html_document
+---
+
+#file created on 21/10/2025 for publication 
+
+```{r setup, include=FALSE}
+#load packages 
+require(haven)
+require(ggplot2)
+require(dplyr)
+require(tidyr)
+require(patchwork)
+require(tibble)
+library(readxl)
+
+#new trajectory assignment by me 
+
+file_path <- "C:\\Users\\sejjl81\\OneDrive - University College London\\Documents\\MTXtrajectory\\Trajectories_07.2025\\traj_works_results.xlsx"
+
+#load relevant data
+group3 <- read_excel(file_path, sheet = "ls_run3") %>% 
+  rename(study_id = "patientid")
+# Assuming your data frame is called df
+names(group3)[names(group3) != "study_id"] <- paste0("3", names(group3)[names(group3) != "study_id"])
+
+group4 <- read_excel(file_path, sheet = "ls_run4")%>% 
+  rename(study_id = "patientid")
+names(group4)[names(group4) != "study_id"] <- paste0("4", names(group4)[names(group4) != "study_id"])
+
+group5 <- read_excel(file_path, sheet = "ls_run5")%>% 
+  rename(study_id = "patientid")
+names(group5)[names(group5) != "study_id"] <- paste0("5", names(group5)[names(group5) != "study_id"])
+
+raw_covs <- read_excel("C:\\Users\\sejjl81\\OneDrive - University College London\\Documents\\MTXtrajectory\\Trajectories_07.2025\\fullcharmscluster.xlsx")
+
+#modify patientid to study_id as per the other datasets 
+raw_covs <- raw_covs %>% 
+  rename(study_id = patientid) %>% 
+  mutate(across(
+    c(activejoints_t2, activejoints_t1, esr_t1, esr_t2, 
+      patientparentglobal_t1, patientparentglobal_t2, timepointdate_diff),
+    as.numeric
+  ))
+
+
+all_traj <- read_excel("C:\\Users\\sejjl81\\OneDrive - University College London\\Documents\\MTXtrajectory\\Trajectories_07.2025\\all_traj.xlsx")
+
+setwd("C:\\Users\\sejjl81\\OneDrive - University College London\\Documents\\MTXtrajectory\\Trajectories_07.2025")
+
+
+```
+
+## 
+
+
+```{r}
+
+#create new variable for Group assignment
+with_groups <- left_join(all_traj, group3, by = "study_id")
+with_groups <- left_join(with_groups, group4, by = "study_id")
+with_groups <- left_join(with_groups, group5, by = "study_id")
+
+sum(is.na(with_groups[, "3_traj_Group"]))
+#6 patients were not assigned!
+
+all_traj <- with_groups %>% 
+  rename(class = "5_traj_Group")
+#great distribution yay! 
+# 1  2  3  4  5 
+# 21 12 17 26 28 
+
+six <- all_traj %>% 
+  filter(is.na(class))
+
+all_traj <- all_traj %>% 
+  filter(!is.na(class))
+
+#make a plot to show distribution among the 102 
+distr_traj <- ggplot(all_traj, aes(x = "", y = class, fill = as.factor(class))) +
+  geom_bar(stat = "identity", width = 1) +
+  coord_polar("y", start = 0) +
+  theme_void() + 
+  labs(title = "Class Distribution") +  
+  theme(legend.position = "none")  
+
+#ggsave("distribution_104.png", distr_traj)
+
+#---------------------------------------------------------------------------------
+
+```
+
+```{r}
+#where do the excluded patients come from? 
+charmscluster <- readRDS("C:\\Users\\sejjl81\\OneDrive - University College London\\Documents\\MTXtrajectory\\WY\\MTXpaper_PBMC_IFNscores.rds")
+charms_26 <- charmscluster$CHARMS %>% 
+  rename("study_id" = L_ID)
+cluster_82 <- charmscluster$CLUSTER
+
+from_cluster82 <- anti_join(cluster_82, six, by = "study_id")
+from_charms26 <- anti_join(charms_26, six, by = "study_id")
+
+#they come from cluster 82 
+```
+
+#####################################################################################
+# generate plots for each COV to understand how they behave 
+####################################################################################
+
+```{r}
+#attach class distribution in 5 groups to covs 
+
+raw_covs <- left_join(raw_covs, group5, by = "study_id")
+raw_covs <- raw_covs %>% 
+  rename(x5_traj_Group = "5_traj_Group")
+raw_covs <- raw_covs %>% 
+  select(-c("timepointdate_t1", "timepointdate_t2"))
+
+#pivot longer for each point has its identity 
+data_long <- raw_covs %>%
+  pivot_longer(
+    cols = c(activejoints_t1, activejoints_t2, physicianglobal_t1, 
+             physicianglobal_t2, patientparentglobal_t1, patientparentglobal_t2, 
+             esr_t1, esr_t2),
+    names_to = c(".value", "fup"),
+    names_pattern = "^(.*)_(t[0-9]+)$"
+  )
+
+#create a new follow up variable 
+data_long <- data_long %>%
+  mutate(
+    time_months = floor(timepointdate_diff / 30.24)
+  )
+#drop absent class 
+data_long <- data_long %>% 
+  filter(!is.na(x5_traj_Group))
+
+# multiply VAS variables by 10 and log transform all variables 
+data_long <- data_long %>%
+  mutate(
+    log_physicianglobal = log1p(physicianglobal * 10), 
+    log_patientparentglobal = log1p(patientparentglobal * 10), 
+    log_activejoints = log1p(activejoints), 
+    log_esr = log1p(esr)
+  )
+
+```
+
+
+#################################################################################
+# build classes population 
+##################################################################################
+#Supplementary Fig2 (model output)
+- further modification on inkscape 
+
+```{r}
+# Define the data with class labels for each proportion
+latent_list <- list(
+  "1" = tibble(Class = "class1", Proportion = 100),
+  "2" = tibble(Class = c("class1", "class2"), Proportion = c(25.74198, 74.25802)),
+  "3" = tibble(Class = c("class1", "class2", "class3"), Proportion = c(38.12665, 24.01502, 37.85833)),
+  "4" = tibble(Class = c("class1", "class2", "class3", "class4"), Proportion = c(9.91366, 23.72214, 28.45517, 37.90903)),
+  "5" = tibble(Class = c("class1", "class2", "class3", "class4", "class5"), Proportion = c(12.13, 11.84, 10.56, 27.10, 38.37)),
+  "6" = tibble(Class = c("class1", "class2", "class3", "class4", "class5", "class6"), Proportion = c(3.63838, 11.62162, 11.16842, 9.82724, 27.56751, 36.17683)),
+  "7" = tibble(Class = c("class1", "class2", "class3", "class4", "class5", "class6", "class7"), Proportion = c(2.69116, 12.08123, 11.66732, 11.47614, 20.47708, 13.84659, 27.76048)),
+  "8" = tibble(Class = c("class1", "class2", "class3", "class4", "class5", "class6", "class7", "class8"), Proportion = c(2.68161, 10.32068, 10.84949, 10.73317, 7.86282, 12.46118, 20.47612, 24.61492)),
+  "9" = tibble(Class = c("class1", "class2", "class3", "class4", "class5", "class6", "class7", "class8", "class9"), Proportion = c(2.27296, 3.33265, 6.17037, 10.25101, 10.19720, 9.19657, 12.61078, 20.16375, 25.80472))
+)
+
+# Convert list into a tibble while preserving the group labels
+latent_df <- bind_rows(latent_list, .id = "Group")
+
+#plot
+lc <- ggplot(latent_df, aes(x = Group, y = Proportion, fill = Class)) +
+  geom_bar(stat = "identity", position = "fill") +  
+  scale_y_continuous(labels = scales::percent) +  
+  scale_fill_brewer(palette = "Blues") +  # Uses distinct categorical colors
+  labs(title = "Distribution by Class number", x = "Classes number", y = "Proportion (%)") +
+  theme_minimal(base_size = 16) + 
+  theme(axis.text.x = element_text(size = 12),
+        axis.text.y = element_text(size = 12))
+
+ggsave("lc.png", lc)
+
+```
+
+##################################################################################
+# plot IFN scores and see outliers 
+#################################################################################
+#supplementary Figure 6
+
+```{r}
+
+tis <- all_traj %>% 
+  select(study_id, pbmc51ifnscores, ra5scores)
+
+ifn51 <- ggplot(tis, aes(x = pbmc51ifnscores)) +
+  geom_histogram() +
+  theme_classic(base_size = 16, base_family = "Arial") +
+  theme(
+    text = element_text(family = "Arial"),
+    axis.text.x = element_text(size = 12, family = "Arial"),
+    axis.text.y = element_text(size = 12, family = "Arial"),
+    plot.title = element_text(family = "Arial")
+  ) +
+  labs(
+    x = "51 IGS value",
+    y = "Count",
+    title = "51 IGS distribution"
+  ) +
+  xlim(4, 9) + ylim(0, 30)
+
+
+ifn5 <- ggplot(tis, aes(x = ra5scores)) + geom_histogram() +
+  theme_classic(base_size = 16, base_family = "Arial") +
+  theme(
+    text = element_text(family = "Arial"),
+    axis.text.x = element_text(size = 12, family = "Arial"),
+    axis.text.y = element_text(size = 12, family = "Arial"),
+    plot.title = element_text(family = "Arial")
+  ) +
+  labs(
+    x = "5 IGS value",
+    y = "Count",
+    title = "5 IGS distribution"
+  ) +
+  xlim(4, 9) + ylim(0, 30)
+
+
+#study the correlation between the two 
+# Compute correlation
+cor_test <- cor.test(tis$pbmc51ifnscores, tis$ra5scores, use = "complete.obs", method = "pearson")
+
+# Extract the values (pearson's r and p value)
+r_value <- round(cor_test$estimate, 2)
+p_value <- cor_test$p.value
+p_label <- ifelse(p_value < 0.001, "p < 0.001", paste0("p = ", signif(p_value, 2)))
+
+#draw the plot 
+gscorr <- ggplot(tis, aes(x = pbmc51ifnscores, y = ra5scores)) +
+  geom_point() +
+  theme_classic(base_size = 16, base_family = "Arial") +
+  theme(
+    text = element_text(family = "Arial"),
+    axis.text.x = element_text(size = 12, family = "Arial"),
+    axis.text.y = element_text(size = 12, family = "Arial"),
+    plot.title = element_text(family = "Arial")
+  ) +
+  labs(
+    x = "51 IGS",
+    y = "5 IGS",
+    title = "Correlation between 51 IGS and 5 IGS"
+  ) +
+  annotate(
+    "text",
+    x = Inf, y = Inf,
+    hjust = 1.5, vjust = 1.5,
+    label = paste0("r = ", r_value, ", ", p_label),
+    size = 5,
+    family = "Arial"
+  )
+
+ifnscores <- (ifn51 + ifn5 | gscorr) + plot_layout(nrow = 2)
+ggsave("Supplementary_Figure6.png", ifnscores, dpi = 600, width = 8, height = 8)
+
+```
+
+
+
+```{r}
+SessionInfo()
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.

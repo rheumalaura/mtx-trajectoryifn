@@ -1,0 +1,793 @@
+---
+title: "Interferon score and methotrexate response trajectories"
+author: "Laura Scagnellato"
+date: "2025-07-24"
+output: html_document
+---
+
+```{r load data}
+
+library(dplyr)
+library(haven)
+library(ggplot2)
+library(patchwork)
+library(readxl)
+library(tableone)
+
+setwd("C:/Users/sejjl81/OneDrive - University College London/Documents/MTXtrajectory/Trajectories_07.2025")
+
+raw_covs <- read_excel("C:\\Users\\sejjl81\\OneDrive - University College London\\Documents\\MTXtrajectory\\Trajectories_07.2025\\fullcharmscluster.xlsx") #all the relevant clinical information about the whole llot of patients screened for suitability
+
+all1175clinicaldata <- read_dta("C:/Users/sejjl81/OneDrive - University College London/Documents/MTXtrajectory/Trajectories_07.2025/1175_allclinicaldata.dta") #all the clinical data available from the charms study 
+
+ifnonly <- read_excel("C:\\Users\\sejjl81\\OneDrive - University College London\\Documents\\MTXtrajectory\\Trajectories_07.2025\\all_traj.xlsx")
+
+
+withtraj <- read_excel("withtraj.xlsx") #codes of patients in with group assignment (699)
+
+```
+
+```{r create a dataset with all information for Table 1 extracting data from relevant datasets}
+#make sure infonly has patient code as all others 
+
+ifnonly <- ifnonly %>% 
+  rename(patientid = "study_id")
+
+
+#harmonise denomination between all1175 and ifnonly 
+
+#correct sex 
+all1175 <- all1175clinicaldata %>%
+  rename(sex = "gender")
+
+ifnonly <- ifnonly %>%
+  mutate(sex = case_when(
+    sex == "2" ~ "1", 
+    sex == "1" ~ "0", 
+    sex == "F" ~ "1", 
+    sex == "M" ~ "0", 
+    TRUE ~ sex
+  )) %>% 
+  mutate(sex = as.numeric(sex), 
+         age_onset = as.numeric(age_onset), 
+         patientparentglobal_t1 = as.numeric(patientparentglobal_t1), 
+         chaq_t1 = as.numeric(chaq_t1), 
+         esr_t1 = as.numeric(esr_t1), 
+         crp_t1 = as.numeric(crp_t1), 
+         patientparentglobal_t2 = as.numeric(patientparentglobal_t2), 
+         chaq_t2 = as.numeric(chaq_t2), 
+         esr_t2 = as.numeric(esr_t2), 
+         crp_t2 = as.numeric(crp_t2))
+
+#correct ethnicity 
+ifnonly <- ifnonly %>%
+  mutate(white_ethnicity = case_when(
+    white_ethnicity == "2" ~ "1", 
+    white_ethnicity == "1" ~ "0", 
+    white_ethnicity == "F" ~ "1", 
+    white_ethnicity == "M" ~ "0", 
+    TRUE ~ white_ethnicity
+  )) %>% 
+  mutate(white_ethnicity = as.numeric(white_ethnicity), 
+         height_t1 = as.numeric(height_t1))
+
+#correct JIA subtype 
+all1175 <- all1175 %>%
+  mutate(jia_subtype = as.character(jia_subtype))
+
+#correct ANA and RF 
+ifnonly <- ifnonly %>%
+  mutate(ana = case_when(
+    ana == "Positive" ~ 1, 
+    ana == "Negative" ~ 0, 
+    TRUE ~ NA
+  )) 
+
+ifnonly <- ifnonly %>%
+  mutate(rf = case_when(
+    rf == "Positive" ~ 1, 
+    rf == "Negative" ~ 0, 
+    TRUE ~ NA_real_
+  )) 
+
+#correct uveitis 
+ifnonly <- ifnonly %>%
+  mutate(uveitis = case_when(
+    uveitis == "2" ~ "1", 
+    uveitis == "1" ~ "1", 
+    uveitis == "Yes" ~ "1", 
+    uveitis == "No" ~ "0", 
+    TRUE ~ uveitis
+  )) %>% 
+  mutate(uveitis = as.numeric(uveitis))
+
+#correct date 
+
+ifnonly <- ifnonly %>%
+  mutate(timepointdate_t1 = as.Date(timepointdate_t1, format = "%d/%m/%Y"), 
+         timepointdate_t2 = as.Date(timepointdate_t2, format = "%d/%m/%Y"), 
+         disease_onset = as.Date(disease_onset, format = "%d/%m/%Y"))
+
+merged <- all1175 %>%
+  full_join(ifnonly, by = "patientid", suffix = c(".all1175", ".ifnonly")) %>%
+  mutate(
+    across(ends_with(".ifnonly"), ~ coalesce(.x, get(sub(".ifnonly", ".all1175", cur_column()))))
+  ) %>%
+  select(-ends_with(".all1175")) %>%
+  rename_with(~ sub(".ifnonly", "", .x), ends_with(".ifnonly"))
+
+#make a column for patients who have IFN score 
+merged <- merged %>% 
+  mutate(ifnscore_yes = case_when(
+    patientid %in% ifnonly$patientid ~ 1,
+    TRUE ~ 0
+  ))
+
+#add information about group assignment because you never know it might be useful 
+
+merged <- merged %>%
+  left_join(withtraj %>% select(patientid, x3_traj_Group, x4_traj_Group, x5_traj_Group),
+            by = "patientid") 
+
+#select only those who have a trajectory! 
+included <- merged %>% 
+  filter(!is.na(x3_traj_Group))
+
+#fix age at baseline 
+
+included <- included %>%
+  mutate(age_t1 = case_when(
+    !is.na(age_mtx_start) ~ age_mtx_start,
+    is.na(age_mtx_start) ~ age,
+    TRUE ~ NA_real_
+  ))
+
+#fix timepoint_diff 
+included <- included %>%
+  mutate(timepointdate_diff = case_when(
+    !is.na(timepointdate_diff) ~ timepointdate_diff, 
+    is.na(timepointdate_diff) ~ as.numeric(timepointdate_t2 - timepointdate_t1, units = "days"),
+    TRUE ~ NA
+  ))
+
+```
+Now I have a dataset named "included" with all the clinical information. I have to be sure that there are no big differences between the bigger dataset of 699 and the smaller dataset of 102. 
+
+NB: jia_subtype
+1	Systemic JIA
+2	Oligoarthritis - persistent
+3	Oligoarthritis - extended
+4	Polyarthritis - RF-ve
+5	Polyarthritis - RF+ve
+6	Enthesitis-related arthritis
+7	Psoriatic JIA
+8	Undifferentiated arthritis
+999	Not available (missing/not recorded)
+888	Field is not applicable
+
+```{r fix diagnoses}
+#fix the diagnoses 
+table(included$jia_subtype)
+
+#                 1                  2                  3                  4                  5                  6 
+#                82                114                130                207                 39                 41 
+#                 7                  8   Oligo - Extended Oligo - Persistent           Poly RF-           Poly RF+ 
+#                33                  4                 10                  3                 11                  2 
+
+included <- included %>% 
+  mutate(jia_subtype = case_when(
+    jia_subtype == "1" ~ "systemic", 
+    jia_subtype == "2" ~ "oligo_persistent",
+    jia_subtype == "3" ~ "oligo_extended",
+    jia_subtype == "Oligo - Extended" ~ "oligo_extended",
+    jia_subtype == "4" ~ "poly_frneg",
+    jia_subtype == "Poly RF-" ~ "poly_frneg",
+    jia_subtype == "5" ~ "poly_frpos",
+    jia_subtype == "Poly RF+" ~ "poly_frpos",
+    jia_subtype == "6" ~ "era",
+    jia_subtype == "7" ~ "psa",
+    jia_subtype == "8" ~ "ujia"
+  ))
+table(included$jia_subtype)
+
+#analyse only oligo and polyrf neg 
+subset_true <- included %>% 
+  filter(jia_subtype %in% c("oligo_extended", "oligo_persistent", "poly_frneg", "ujia", "era", "psa", "poly_frpos"))
+#591 CYP, how many have IFN score 
+
+sum(!is.na(subset_true$pbmc51ifnscores))
+#only 68 children 
+#distribution among classes is 
+subset_ifn <- subset_true %>% 
+  filter(!is.na(pbmc51ifnscores))
+
+table(subset_ifn$x5_traj_Group)
+# 1  2  3  4  5 
+# 11 10 13 16 16 
+
+table(subset_ifn$x4_traj_Group)
+#   1  2  3  4 
+#   9 22 19 16
+
+table(subset_ifn$x3_traj_Group)
+# 1  2  3 
+# 26 22 18
+
+saveRDS(included, "included.rds")
+
+```
+
+
+#generate the data for Table 1 (clinical information and demographics)
+```{r table analysis}
+
+#select the variables of interest 
+interest_cat <- c("sex", "white_ethnicity")
+interest_num <- c("timepointdate_diff", "disease_dur_mtx_start", "mtx_dose", "age_t1", 
+              "esr_t1", "crp_t1", "patientparentglobal_t1", "limitedjoints_t1", "activejoints_t1", "physicianglobal_t1", 
+              "esr_t2", "crp_t2", "patientparentglobal_t2", "limitedjoints_t2", "activejoints_t2", "physicianglobal_t2")
+
+
+#generate a table: for each variable of interest generate a row containing the following information: 
+#interest_cat : proportion, percentage of "1" on total, proportion among ifnscore_yes == 1, percentage of "1" among ifnscore_yes == 1
+#interest_num: median, 1st quartile-3rd quartile; median among those with ifnscore_yes == 1, 1st quartile- 3rd quartile among those with ifnscore_yes == 1,
+
+# Initialize an empty data frame to store results for the cateorical variables 
+interest_cat_table <- data.frame(
+    Count_Total = numeric(),
+    Percent_Total = numeric(),
+    Count_IFN_Yes = numeric(),
+    Percent_IFN_Yes = numeric()
+  )
+
+
+# Loop through each variable
+for (var in interest_cat) {
+  # Total counts
+  total_1 <- sum(included[[var]] == 1, na.rm = TRUE)
+  total_n <- sum(!is.na(included[[var]]))
+  percent_total <- (total_1 / total_n) * 100
+
+  # Subset where ifnscore_yes == 1
+  subset <- included[included$ifnscore_yes == 1, ]
+  subset_1 <- sum(subset[[var]] == 1, na.rm = TRUE)
+  subset_n <- sum(!is.na(subset[[var]]))
+  percent_subset <- (subset_1 / subset_n) * 100
+
+  # Append to the table
+  interest_cat_table <- rbind(interest_cat_table, data.frame(
+    Variable = var,
+    Count_1_Total = total_1,
+    Percent_1_Total = round(percent_total, 2),
+    Count_IFN_Yes = subset_1,
+    Percent_IFN_Yes = round(percent_subset, 2),
+    stringsAsFactors = FALSE
+  ))
+}
+
+write.csv(interest_cat_table, "table_categorical.csv")
+
+###################################################################################
+# Initialize an empty data frame to store results for numerical variables 
+
+interest_num_table <- data.frame(
+  Variable = character(),
+  Median_total = numeric(),
+  IQR_total = character(),
+  Median_subset_IFNYes = numeric(),
+  IQR_subset_IFNYes = character(),
+  stringsAsFactors = FALSE
+)
+
+#loop through variables 
+for (var in interest_num) {
+  Median_total <- round(median(included[[var]], na.rm = TRUE), 2)
+  q1 <- round(quantile(included[[var]], 0.25, na.rm = TRUE), 2)
+  q3 <- round(quantile(included[[var]], 0.75, na.rm = TRUE), 2)
+  IQR_total <- paste0(q1, "-", q3)
+  
+  subset <- included[included$ifnscore_yes == 1, ]
+  Median_subset <- round(median(subset[[var]], na.rm = TRUE), 2)
+  q1.5 <- round(quantile(subset[[var]], 0.25, na.rm = TRUE), 2)
+  q3.5 <- round(quantile(subset[[var]], 0.75, na.rm = TRUE), 2)
+  IQR_subset <- paste0(q1.5, "-", q3.5)
+  
+  interest_num_table <- rbind(interest_num_table, data.frame(
+    Variable = var,
+    Median_total = Median_total,
+    IQR_total = IQR_total, 
+    Median_subset_IFNYes = Median_subset,
+    IQR_subset_IFNYes  = IQR_subset,
+    stringsAsFactors = FALSE
+  ))
+}
+
+write.csv(interest_num_table, "table_numeric.csv")
+
+
+
+```
+
+#Table 1 # p values among the two datasets 
+#this is not appropriate 
+
+
+```{r table comparison big group and subset data}
+
+interest_cat <- c("sex", "white_ethnicity", "x3_traj_Group", "x4_traj_Group", "x5_traj_Group")
+interest_num <- c("timepointdate_diff", "disease_dur_mtx_start", "mtx_dose", "age_t1", 
+              "esr_t1", "crp_t1", "patientparentglobal_t1", "limitedjoints_t1", "activejoints_t1", "physicianglobal_t1", 
+              "esr_t2", "crp_t2", "patientparentglobal_t2", "limitedjoints_t2", "activejoints_t2", "physicianglobal_t2")
+
+# Initialize results table
+P_values <- data.frame(
+  Variable = character(), 
+  P_value = numeric(),
+  stringsAsFactors = FALSE
+)
+
+# Subset
+subset <- included[included$ifnscore_yes == 1, ]
+rest <- included[included$ifnscore_yes != 1, ]
+
+# Categorical variables: Chi-squared test
+for (var in interest_cat) {
+  full_dist <- table(included[[var]])
+  subgroup_dist <- table(subset[[var]])
+  
+  # Align levels
+  subgroup_dist <- subgroup_dist[names(full_dist)]
+  
+  result <- chisq.test(x = subgroup_dist, p = prop.table(full_dist))
+  
+  P_values <- rbind(P_values, data.frame(
+    Variable = var,
+    P_value = round(result$p.value, 3),
+    stringsAsFactors = FALSE
+  ))
+}
+
+# Numerical variables: Kolmogorov–Smirnov test
+for (var in interest_num) {
+  # Remove NAs
+  x <- subset[[var]]
+  y <- rest[[var]]
+  x <- x[!is.na(x)]
+  y <- y[!is.na(y)]
+  
+  if (length(x) > 0 && length(y) > 0) {
+    result <- ks.test(x, y)
+    
+    P_values <- rbind(P_values, data.frame(
+      Variable = var,
+      P_value = round(result$p.value, 3),
+      stringsAsFactors = FALSE
+    ))
+  }
+}
+
+
+
+# Apply BH correction to p-values
+P_values$BH_corrected_p <- p.adjust(P_values$P_value, method = "BH")
+
+
+
+```
+
+#the gold standard is Standardized Mean Difference (SMD), often called Cohen's d.
+Thresholds:
+SMD < 0.1: Excellent balance (Very representative).
+SMD 0.1 – 0.2: Acceptable balance.
+SMD > 0.2: Imbalanced (The subsample is likely biased on this variable).
+
+```{r}
+#prepare the data ####
+included$x3_traj_Group <- factor(included$x3_traj_Group)
+included$x4_traj_Group <- factor(included$x4_traj_Group)
+included$x5_traj_Group <- factor(included$x5_traj_Group)
+
+interest_vars <- c("sex", "white_ethnicity", "x3_traj_Group", "x4_traj_Group", "x5_traj_Group", 
+                   "timepointdate_diff", "disease_dur_mtx_start", "mtx_dose", "age_t1", 
+              "esr_t1", "crp_t1", "patientparentglobal_t1", "limitedjoints_t1", "activejoints_t1", "physicianglobal_t1", 
+              "esr_t2", "crp_t2", "patientparentglobal_t2", "limitedjoints_t2", "activejoints_t2", "physicianglobal_t2")
+
+# Create the Table 1 object ####
+
+tab1 <- CreateTableOne(vars = interest_vars, 
+                       strata = "ifnscore_yes", 
+                       data = included, 
+                       factorVars = interest_cat, # Tells R these are categorical
+                       test = FALSE) # We turn off p-values (focus on SMD)
+
+print(tab1, smd = TRUE, showAllLevels = TRUE)
+
+#export the table1 object ####
+tab1_mat <- print(tab1, 
+                  smd = TRUE, 
+                  showAllLevels = TRUE, 
+                  quote = FALSE, 
+                  noSpaces = TRUE, 
+                  printToggle = FALSE)
+tab1_export <- as.data.frame(tab1_mat)
+write.csv(tab1_export, "smd_ifnsubset_vs_rest.csv")
+
+#i can also visualise it ####
+
+# Extract the SMDs into a clean matrix
+smd_matrix <- ExtractSmd(tab1)
+smd_data <- as.data.frame(smd_matrix)
+smd_data$Variable <- rownames(smd_data)
+colnames(smd_data) <- c("SMD", "Variable")
+
+# Plot it
+ggplot(smd_data, aes(x = SMD, y = reorder(Variable, SMD))) +
+  geom_point(size = 3, color = "steelblue") +
+  geom_vline(xintercept = 0.1, linetype = "dashed", color = "green") +
+  geom_vline(xintercept = 0.2, linetype = "dashed", color = "red") +
+  theme_minimal() +
+  labs(title = "Standardized Mean Differences (Subsample vs Remainder)",
+       subtitle = "Inside Green Line (<0.1) = Excellent Balance\nInside Red Line (<0.2) = Acceptable Balance",
+       x = "SMD",
+       y = "Variable")
+
+#redfalgs 
+red_flags <- smd_data %>% 
+  filter(SMD >0.19)
+#redflags for           SMD 
+
+#white_ethnicity        0.5636747 #many more white people in IFN score group      
+#x3_traj_Group          0.2671528 #group 3 is underrepresented and group 1 is overrepresented in the IFN subset         
+#x4_traj_Group          0.3629018 #group 1&2 are overrepresented, and group 4 is underrepresented in the IFN subset        
+#x5_traj_Group          0.3825234 #group 5 is overrepresented in the NON-IFN subset, whereas groups 1, 2, 3 are smaller        
+#disease_dur_mtx_start  0.2243195  #shorter in the IFN subset by 1 year? 
+#mtx_dose               0.4286684 #lower in ifn subset: 11.92 (4.47)  vs. 13.84 (4.51)            
+#crp_t1                 0.2631812 #much higher in ifn subset??           
+#limitedjoints_t1       0.2330996 #higher in ifn subset      
+#activejoints_t1        0.2519173 #higher in ifn subset       
+#patientparentglobal_t2 0.2252186 #higher in ifn subset
+#limitedjoints_t2       0.2304481 #higher in ifn subset 2.98 (4.91)    2.05 (2.95)   0.230     
+#activejoints_t2        0.3366760 #higher in ifn subset activejoints_t2 (mean (SD))                3.04 (5.35)    1.61 (2.76)   0.337       
+#physicianglobal_t2     0.2219982  #higher in ifn subset  physicianglobal_t2 (mean (SD))             2.03 (2.08)    1.58 (1.96)
+
+
+
+
+```
+
+Look for missing data 
+#Supplementary Table 1 
+
+```{r table missing data}
+interest <- c("sex", "white_ethnicity", "timepointdate_diff", "disease_dur_mtx_start", "mtx_dose", "age_t1", "age_onset", 
+              "esr_t1", "crp_t1", "patientparentglobal_t1", "limitedjoints_t1", "activejoints_t1", "physicianglobal_t1", 
+              "esr_t2", "crp_t2", "patientparentglobal_t2", "limitedjoints_t2", "activejoints_t2", "physicianglobal_t2")
+
+
+#loop to calculate the NAs and the percentange of values 
+#create table 
+missing_table <- data.frame(
+  Variable = character(),
+  Count_NA = numeric(), 
+  Percentage_NA = numeric(),
+  Count_NA_subset = numeric(), 
+  Percentage_NA_subset = numeric()
+)
+
+percentage <- function(part, whole) {
+  if (whole == 0) {
+    return(NA)
+  }
+  return((part / whole) * 100)
+}
+
+
+#create loop
+for (var in interest) {
+  Count_NA <- sum(is.na(included[[var]]))
+  subset <- included[included$ifnscore_yes == 1, ]
+  Count_NA_subset <- sum(is.na(subset[[var]]))
+  
+  missing_table <- rbind(missing_table, data.frame(
+    Variable = var,
+    Count_NA = Count_NA,
+    Percentage_NA = round(percentage(Count_NA, nrow(included)), 2), 
+    Count_NA_subset = Count_NA_subset,
+    Percentage_NA_subset = round(percentage(Count_NA_subset, nrow(subset)), 2),
+    stringsAsFactors = FALSE
+  ))
+}
+
+write.csv(missing_table, "missing_table.csv")
+```
+
+#are the missing values driving the SMD for the redflags? 
+
+```{r}
+#"Shadow Matrix" (Binary map of missingness) ####
+missingness_data <- included %>%
+  select(all_of(interest_vars)) %>%  
+  mutate(across(everything(), ~ as.numeric(is.na(.)))) %>% 
+  mutate(ifnscore_yes = included$ifnscore_yes) 
+
+#TableOne on this Shadow Matrix ####
+# We treat all variables as non-normal to get the SMD for the *proportion* of missingness
+tab_missing <- CreateTableOne(vars = interest_vars,
+                              strata = "ifnscore_yes",
+                              data = missingness_data,
+                              test = FALSE)
+
+#Print and Extract ####
+print(tab_missing, smd = TRUE)
+mat_missing <- print(tab_missing, smd = TRUE, printToggle = FALSE)
+
+#COMPARE: Value SMD vs. Missingness SMD
+# Let's merge your original SMDs with these new "Missingness SMDs"
+
+# Extract original SMDs (from your previous tab1 object)
+smd_original <- as.data.frame(ExtractSmd(tab1)) %>% 
+  rename(SMD_Value = "1 vs 2") %>% 
+  rownames_to_column(var = "Variable")
+
+# Extract Missingness SMDs
+smd_missing <- as.data.frame(ExtractSmd(tab_missing)) %>% 
+  rename(SMD_missingness = "1 vs 2") %>% 
+  rownames_to_column(var = "Variable")
+
+# Merge them
+comparison_table <- left_join(smd_original, smd_missing, by = "Variable") %>%
+  mutate(
+    # Flag variables that are "Suspicious"
+    # (High Value Imbalance + High Missingness Imbalance)
+    Status = case_when(
+      SMD_Value > 0.19 & SMD_missingness > 0.1 ~ "⚠️ ARTIFACT RISK (Missingness driving imbalance?)",
+      SMD_Value > 0.19 & SMD_missingness <= 0.1 ~ "❗ TRUE IMBALANCE (Groups are actually different)",
+      TRUE ~ "OK"
+    )
+  )
+
+# 5. View the culprits
+print(comparison_table)
+
+# Optional: Export to check in Excel
+write.csv(comparison_table, "SMD_Value_vs_Missingness.csv", row.names = FALSE)
+
+
+```
+
+
+#check the uveitis 
+```{r checks for paper data}
+
+#check uveitis in group 1 (high phyvAS)
+table(included$uveitis)
+sum(is.na(included$uveitis))
+
+group1_uveitis <- included %>% 
+  filter(x5_traj_Group == 1)
+table(group1_uveitis$uveitis)
+sum(is.na(group1_uveitis$uveitis))
+#proportion with uveitis 0.4509804
+#missing: 9
+
+
+group2_uveitis <- included %>% 
+  filter(x5_traj_Group == 2)
+table(group2_uveitis$uveitis)
+sum(is.na(group2_uveitis$uveitis))
+#proportion with uveitis 0.3090909
+#missing: 15
+
+group3_uveitis <- included %>% 
+  filter(x5_traj_Group == 3)
+table(group3_uveitis$uveitis)
+sum(is.na(group3_uveitis$uveitis))
+#proportion with uveitis 0.1896552
+#missing: 13
+
+group4_uveitis <- included %>% 
+  filter(x5_traj_Group == 4)
+table(group4_uveitis$uveitis)
+sum(is.na(group4_uveitis$uveitis))
+#proportion with uveitis 0.2125984
+#missing: 34/188
+
+group5_uveitis <- included %>% 
+  filter(x5_traj_Group == 5)
+table(group5_uveitis$uveitis)
+sum(is.na(group5_uveitis$uveitis))
+#proportion with uveitis 0.173913
+#missing: 43/259
+
+
+
+
+#################################################################################
+#class assignment in subsets
+table(included$x5_traj_Group)
+# 1   2   3   4   5 
+# 83  87  82 188 259 
+
+table(subset$x5_traj_Group)
+# 1  2  3  4  5 
+# 20 15 17 23 27
+# (Subset vs all, group 1: 19.6% vs 11.9%; group 2: 14.7% vs 12.4%; group 3: 16.7% vs 11.9%; group 4: 22.5% vs 26.9%; group 5: 26.5% vs 
+# 37.5%). 
+
+
+```
+
+#after fixing diagnoses, what changes in the IFN - trajectory relationship? 
+```{r run analyses only with oligo and poly rf neg}
+
+#relevant datasets : subset_true (476 CYPs) and subset_ifn (66 patients)
+#these subsets include only patients wiht a diagnosis of oligoJIA or polyRFneg 
+
+################################################################################
+#plot IFN score (51 genes for now) and subset_ifn in 3 classes
+# Define labels
+labels <- c(
+  "1" = "slow improver",
+  "2" = "fast improver",
+  "3" = "persistent"
+)
+
+subset_ifn$x3_traj_Group <- factor(subset_ifn$x3_traj_Group, levels = names(labels), labels = labels)
+
+x3ifn51traj <- ggplot(subset_ifn, aes(x = x3_traj_Group, y = pbmc51ifnscores)) + 
+  geom_boxplot(outlier.shape = NA) + # Hide default outliers
+  geom_point(position = position_jitter(width = 0.15), 
+             size = 1.5, alpha = 0.7, color = "black") + # Show individual dots
+  labs(
+    title = "Class and 51GS", 
+    x = "Class", 
+    y = "51 genes score"
+  ) + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 14),
+        axis.text.y = element_text(size = 14),
+        axis.title.x = element_text(size = 14),
+        axis.title.y = element_text(size = 14),
+        plot.title = element_text(size = 16, face = "bold"))
+#lots of outliers. See if there is any statistically significant difference between classes? 
+kruskal.test(pbmc51ifnscores ~ x3_traj_Group, data = subset_ifn)
+#in 66 CYPs p-value 0.07752... bordering significance? if i add 2 patients p-value = 0.1322
+kruskal.test(ra5scores ~ x3_traj_Group, data = subset_ifn)
+#p-value = 0.147 far away from significance, if i add 2 CYPs p-value = 0.2099
+
+##################################################################################
+#plot ifn score and 4 classes 
+labels <- c(
+  "1" = "High phyVAS",
+  "2" = "Fast responder",
+  "3" = "Slow responder", 
+  "4" = "Non responder"
+)
+
+subset_ifn$x4_traj_Group <- factor(subset_ifn$x4_traj_Group, levels = names(labels), labels = labels)
+
+x4ifn51traj <- ggplot(subset_ifn, aes(x = x4_traj_Group, y = pbmc51ifnscores)) + 
+  geom_boxplot(outlier.shape = NA) + # Hide default outliers
+  geom_point(position = position_jitter(width = 0.15), 
+             size = 1.5, alpha = 0.7, color = "black") + # Show individual dots
+  labs(
+    title = "Class and 51GS", 
+    x = "Class", 
+    y = "51 genes score"
+  ) + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 14),
+        axis.text.y = element_text(size = 14),
+        axis.title.x = element_text(size = 14),
+        axis.title.y = element_text(size = 14),
+        plot.title = element_text(size = 16, face = "bold"))
+
+#is there any statistically significant difference ? 
+kruskal.test(pbmc51ifnscores ~ x4_traj_Group, data = subset_ifn)
+#p-value = 0.2296 NADA if I add 2 CYPS p-value = 0.3293
+kruskal.test(ra5scores ~ x3_traj_Group, data = subset_ifn)
+#p-value = 0.147 NADA, if I add 2 CYPS p-value = 0.3293
+
+##################################################################################
+#lets try with 5 classes 
+# Define labels
+labels <- c(
+  "1" = "High phyVAS",
+  "2" = "Fast improver",
+  "3" = "High PGE", 
+  "4" = "Slow improver",
+  "5" = "Non responder"
+)
+
+subset_ifn$x5_traj_Group <- factor(subset_ifn$x5_traj_Group, levels = names(labels), labels = labels)
+
+x5ifn51traj <- ggplot(subset_ifn, aes(x = x5_traj_Group, y = pbmc51ifnscores)) + 
+  geom_boxplot(outlier.shape = NA) + # Hide default outliers
+  geom_point(position = position_jitter(width = 0.15), 
+             size = 1.5, alpha = 0.7, color = "black") + # Show individual dots
+  labs(
+    title = "Class and 51GS", 
+    x = "Class", 
+    y = "51 genes score"
+  ) + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 14),
+        axis.text.y = element_text(size = 14),
+        axis.title.x = element_text(size = 14),
+        axis.title.y = element_text(size = 14),
+        plot.title = element_text(size = 16, face = "bold"))
+
+
+
+#any statistical difference between classes? 
+kruskal.test(pbmc51ifnscores ~ x5_traj_Group, data = subset_ifn)
+# p-value = 0.2805 NEIN if I add 2 CYPs #p-value = 0.3725
+kruskal.test(ra5scores ~ x5_traj_Group, data = subset_ifn)
+# p-value = 0.08245 borders significance?  if I add 2 CYPs p-value = 0.09961
+
+#check the 5 gene plot 
+x5ifn5traj <- ggplot(subset_ifn, aes(x = x5_traj_Group, y = ra5scores)) + 
+  geom_boxplot(outlier.shape = NA) + # Hide default outliers
+  geom_point(position = position_jitter(width = 0.15), 
+             size = 1.5, alpha = 0.7, color = "black") + # Show individual dots
+  labs(
+    title = "Class and 5GS", 
+    x = "Class", 
+    y = "5 genes score"
+  ) + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 14),
+        axis.text.y = element_text(size = 14),
+        axis.title.x = element_text(size = 14),
+        axis.title.y = element_text(size = 14),
+        plot.title = element_text(size = 16, face = "bold"))
+
+write.csv(subset_true, "subset_onlyoligo_poly.csv")
+
+
+
+
+```
+
+#fix for outliers and see what happens --> no great pvals 
+```{r see what happens if I remove outliers from IFN score}
+
+ifnonly <- included %>% 
+  filter(!is.na(pbmc51ifnscores))
+
+ggplot(ifnonly, aes(x = pbmc51ifnscores)) +
+  geom_histogram() 
+
+ifnonly_to7 <- ifnonly %>% 
+  filter(pbmc51ifnscores < 7 | pbmc51ifnscores == 7)
+#5 values out 
+
+kruskal.test(pbmc51ifnscores ~ x3_traj_Group, data = ifnonly_to7)
+#p-value = 0.4232
+kruskal.test(pbmc51ifnscores ~ x4_traj_Group, data = ifnonly_to7)
+#p-value = 0.8048
+kruskal.test(pbmc51ifnscores ~ x5_traj_Group, data = ifnonly_to7)
+#p-value = 0.7404
+
+#check the 5 classes plot
+labels <- c(
+  "1" = "High phyVAS",
+  "2" = "Fast improver",
+  "3" = "High PGE", 
+  "4" = "Slow improver",
+  "5" = "Non responder"
+)
+
+subset_ifn$x5_traj_Group <- factor(subset_ifn$x5_traj_Group, levels = names(labels), labels = labels)
+x5ifn51traj <- ggplot(ifnonly_to7, aes(x = x5_traj_Group, y = pbmc51ifnscores)) + 
+  geom_boxplot(outlier.shape = NA) + # Hide default outliers
+  geom_point(position = position_jitter(width = 0.15), 
+             size = 1.5, alpha = 0.7, color = "black") + # Show individual dots
+  labs(
+    title = "Class and 51GS", 
+    x = "Class", 
+    y = "51 genes score"
+  ) + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 14),
+        axis.text.y = element_text(size = 14),
+        axis.title.x = element_text(size = 14),
+        axis.title.y = element_text(size = 14),
+        plot.title = element_text(size = 16, face = "bold"))
+
+```

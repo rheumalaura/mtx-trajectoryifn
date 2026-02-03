@@ -1,4 +1,4 @@
-# mtx-trajectoryifn
+# Relationship between trajectories and IFN score response to methotrexate in JIA
 
 The project aimed at combining the IFN score designed by Melissa Kartawinata (MK) et al and the machine learning based trajectory analysis performed by Stephanie Shoop Worrall et al (SSW).
 
